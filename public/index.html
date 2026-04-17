@@ -18,11 +18,17 @@
         <span class="status-dot"></span>
         En línea
       </div>
-    </div>
-    <div class="chat-window" id="chat-window">
-      <div class="message system">
-        ¡Bzzz! 🌻 Hola, soy Meli. ¿En qué puedo ayudarte hoy?
+      <div class="header-dots">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
       </div>
+    </div>
+    <div class="chat-window" id="chat-window"></div>
+    <div class="chips-container" id="chips-container">
+      <button class="chip" onclick="sendChip('Cuidado de abejas')">🐝 Cuidado de abejas</button>
+      <button class="chip" onclick="sendChip('Producción de miel')">🍯 Producción de miel</button>
+      <button class="chip" onclick="sendChip('Colmenas')">🏠 Colmenas</button>
     </div>
     <form class="chat-input-form" id="chat-form">
       <input type="text" id="message-input" placeholder="Escribe tu consulta aquí..." autocomplete="off">
