@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meli 🐝 — Asistente Apícola BeeHappy</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <div class="header-avatar">
+        <img src="Logo.png" alt="Meli">
+      </div>
+      <h2>Meli</h2>
+      <span>Asistente Apícola · BeeHappy</span>
+      <div class="status">
+        <span class="status-dot"></span>
+        En línea
+      </div>
+    </div>
+    <div class="chat-window" id="chat-window">
+      <div class="message system">
+        ¡Bzzz! 🌻 Hola, soy Meli. ¿En qué puedo ayudarte hoy?
+      </div>
+    </div>
+    <form class="chat-input-form" id="chat-form">
+      <input type="text" id="message-input" placeholder="Escribe tu consulta aquí..." autocomplete="off">
+      <button type="submit" id="send-button">➤</button>
+    </form>
+  </div>
+  <script src="client.js"></script>
+</body>
+</html>
