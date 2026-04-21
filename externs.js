@@ -2,7 +2,7 @@
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 
 const API_ESTADISTICAS = process.env.API_ESTADISTICAS_URL || 'https://apiestadisticas.serviciocdn.icu/api/v1';
-const API_AG           = process.env.API_AG_URL           || 'https://AG.montsev.site';
+const API_AG           = process.env.API_AG_URL           || null;
 const MAC_RASPBERRY    = process.env.MAC_RASPBERRY        || 'AA:BB:CC:DD:EE:FF';
 
 // Obtiene estadísticas del día de todos los sensores de la Raspberry
@@ -58,32 +58,36 @@ async function ejecutarAG(temp_inicial, hum_inicial) {
 // Función principal que combina estadísticas + AG
 async function combineEstadisticas() {
   const stats = await getEstadisticasDia();
+  const temp  = stats.temperatura?.promedio ?? null;
+  const hum   = stats.humedad?.promedio     ?? null;
 
-  const temp = stats.temperatura?.promedio ?? 35.0;
-  const hum  = stats.humedad?.promedio     ?? 65.0;
+  const agUrl = process.env.API_AG_URL;
 
-  const resultadoAG = await ejecutarAG(temp, hum);
-  const mejor       = resultadoAG.mejor_intervencion_global;
-  const bc          = resultadoAG.base_conocimiento_usada;
+  let mejor = null;
+  if (agUrl) {
+    try {
+      const resultadoAG = await ejecutarAG(temp ?? 35.0, hum ?? 65.0);
+      mejor = resultadoAG.mejor_intervencion_global;
+    } catch (err) {
+      console.log('⚠️  AG no disponible');
+    }
+  }
 
   return {
     data: {
       estadisticas_dia:   stats,
       mejor_intervencion: mejor,
-      base_conocimiento:  bc,
-      top3:               resultadoAG.tabla_top3,
     },
     resumen: {
       temp_promedio_hoy: temp,
       hum_promedio_hoy:  hum,
-      accion_recomendada: {
-        ventilacion: `${mejor?.vent   ?? 0}%`,
-        agua:        `${mejor?.agua   ?? 0} ml`,
-        jarabe:      `${mejor?.jarabe ?? 0} g`,
-        sombra:       mejor?.sombra ? 'Sí' : 'No',
-        costo_MXN:    mejor?.costo_MXN ?? 0,
-        fitness:      mejor?.fitness   ?? 0,
-      },
+      accion_recomendada: mejor ? {
+        ventilacion: `${mejor.vent}%`,
+        agua:        `${mejor.agua} ml`,
+        jarabe:      `${mejor.jarabe} g`,
+        sombra:       mejor.sombra ? 'Sí' : 'No',
+        costo_MXN:    mejor.costo_MXN,
+      } : null,
     },
   };
 }
