@@ -1,23 +1,20 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const Groq = require('groq-sdk');
-const { combineEstadisticas } = require('./externs');
+const cors    = require('cors');
+const Groq    = require('groq-sdk');
+const { combineEstadisticas, tools } = require('./externs');
 
-const app = express();
+const app  = express();
 const port = 3000;
 
-// --- Configuración de Groq ---
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 app.use(express.json());
 app.use(cors({ origin: '*' }));
 app.use(express.static('public'));
 
-// --- LÓGICA DE DETECCIÓN ---
+// --- DETECCIÓN DE TIPO ---
 function detectarTipoConsulta(mensaje) {
   const mensajeLower = mensaje.toLowerCase();
 
@@ -28,7 +25,8 @@ function detectarTipoConsulta(mensaje) {
         'rendimiento', 'números', 'numeros', 'reporte', 'informe', 'métricas',
         'metricas', 'cifras', 'cantidad', 'cuánto', 'cuanto', 'porcentaje',
         'promedio', 'total', 'resumen', 'análisis', 'analisis', 'registros',
-        'mostrar', 'muestra', 'dame', 'ver', 'consultar', 'obtener'
+        'mostrar', 'muestra', 'dame', 'ver', 'consultar', 'obtener',
+        'temperatura', 'humedad', 'sensor', 'colmena', 'estado',
       ],
       requiere_funcion: true
     },
@@ -37,9 +35,11 @@ function detectarTipoConsulta(mensaje) {
         'recomendación', 'recomendaciones', 'recomienda', 'recomiendas',
         'sugieres', 'sugerencia', 'sugerencias', 'consejo', 'consejos',
         'qué debo', 'que debo', 'cómo puedo', 'como puedo', 'mejor manera',
-        'ayuda', 'ayúdame', 'ayudame', 'orientación', 'orientacion'
+        'ayuda', 'ayúdame', 'ayudame', 'orientación', 'orientacion',
+        'intervención', 'intervencion', 'qué hacer', 'que hacer',
+        'ventilación', 'ventilacion', 'agua', 'jarabe', 'sombra',
       ],
-      requiere_funcion: false
+      requiere_funcion: true  // también usa el AG para recomendaciones
     },
     problemas: {
       palabras: [
@@ -57,25 +57,24 @@ function detectarTipoConsulta(mensaje) {
     }
   };
 
-  let tipoDetectado = 'general';
+  let tipoDetectado   = 'general';
   let maxCoincidencias = 0;
+  let requiereFuncion  = false;
 
   for (const [tipo, config] of Object.entries(tipos)) {
-    const coincidencias = config.palabras.filter(palabra =>
-      mensajeLower.includes(palabra)
-    ).length;
-
+    const coincidencias = config.palabras.filter(p => mensajeLower.includes(p)).length;
     if (coincidencias > maxCoincidencias) {
       maxCoincidencias = coincidencias;
-      tipoDetectado = tipo;
+      tipoDetectado    = tipo;
+      requiereFuncion  = config.requiere_funcion;
     }
   }
 
-  console.log(`🐛 DEBUG - Tipo detectado: ${tipoDetectado}`);
-  return { tipo: tipoDetectado };
+  console.log(`🐛 DEBUG - Tipo: ${tipoDetectado} | Requiere función: ${requiereFuncion}`);
+  return { tipo: tipoDetectado, requiere_funcion: requiereFuncion };
 }
 
-// --- FUNCIÓN DE LIMPIEZA ---
+// --- LIMPIEZA MARKDOWN ---
 function eliminarMarkdown(texto) {
   if (!texto) return '';
   return texto
@@ -103,9 +102,23 @@ FORMATO DE RESPUESTA OBLIGATORIO:
 • Usa espacios y saltos de línea para organizar la información
 • Responde siempre en español`;
 
+const SYSTEM_PROMPT_DATOS = `${SYSTEM_PROMPT_BASE}
+
+CUANDO RECIBAS DATOS DE ESTADÍSTICAS Y AG:
+• Menciona la temperatura y humedad promedio del día
+• Explica la mejor intervención recomendada por el algoritmo genético en términos simples
+• Indica el costo estimado en pesos mexicanos
+• Si el estado es crítico, usa ⚠️ y sé más enfático
+• Traduce los valores técnicos a lenguaje apícola natural
+  - vent: ventilación de la colmena
+  - agua: suministro de agua fresca
+  - jarabe: alimentación con jarabe de azúcar
+  - sombra: colocar protección solar
+• Siempre termina con un consejo motivador 🌻`;
+
 const PROMPTS_ESPECIALIZADOS = {
-  recomendaciones: `${SYSTEM_PROMPT_BASE}
-Especialízate en dar recomendaciones prácticas y accionables sobre apicultura.`,
+  recomendaciones: SYSTEM_PROMPT_DATOS,
+  estadisticas:    SYSTEM_PROMPT_DATOS,
   problemas: `${SYSTEM_PROMPT_BASE}
 Especialízate en diagnosticar y resolver problemas de colmenas con empatía y conocimiento experto.`,
 };
@@ -114,42 +127,84 @@ Especialízate en diagnosticar y resolver problemas de colmenas con empatía y c
 app.post('/api/message', async (req, res) => {
   try {
     const { message, history } = req.body;
+    if (!message) return res.status(400).json({ error: '¡Bzzz! 🐝 Necesito un mensaje.' });
 
-    if (!message) {
-      return res.status(400).json({ error: '¡Bzzz! 🐝 Necesito un mensaje.' });
-    }
+    const { tipo, requiere_funcion } = detectarTipoConsulta(message);
 
-    const { tipo } = detectarTipoConsulta(message);
+    const systemPrompt = PROMPTS_ESPECIALIZADOS[tipo] || SYSTEM_PROMPT_BASE;
 
-    let systemPrompt = PROMPTS_ESPECIALIZADOS[tipo] || SYSTEM_PROMPT_BASE;
-
-    // Convertir historial de formato Gemini a formato Groq/OpenAI
+    // Convertir historial Gemini → Groq
     const historialConvertido = (history || []).map(msg => ({
-      role: msg.role === 'model' ? 'assistant' : 'user',
+      role:    msg.role === 'model' ? 'assistant' : 'user',
       content: msg.parts ? msg.parts[0].text : msg.content,
     }));
 
     const messages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system',    content: systemPrompt },
       ...historialConvertido,
-      { role: 'user', content: message },
+      { role: 'user',      content: message },
     ];
 
-    console.log(`🐛 DEBUG - Enviando a Groq (tipo: ${tipo})...`);
+    console.log(`🐛 DEBUG - Enviando a Groq (tipo: ${tipo}, función: ${requiere_funcion})...`);
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: messages,
-      max_tokens: 1024,
-      temperature: 0.7,
-    });
+    let respuestaFinal = '';
+    let data = null;
 
-    const respuestaFinal = completion.choices[0]?.message?.content || '';
-    const respuestaLimpia = eliminarMarkdown(respuestaFinal);
+    if (requiere_funcion) {
+      // Primera llamada con tools habilitados
+      const completion = await groq.chat.completions.create({
+        model:       'llama-3.3-70b-versatile',
+        messages:    messages,
+        tools:       tools,
+        tool_choice: 'auto',
+        max_tokens:  2048,
+        temperature: 0.7,
+      });
+
+      const choice     = completion.choices[0];
+      const toolCalls  = choice.message.tool_calls;
+
+      if (toolCalls && toolCalls.length > 0) {
+        console.log(`🐝 INFO - Groq solicitó tool: ${toolCalls[0].function.name}`);
+
+        // Ejecutar la función real
+        const resultado = await combineEstadisticas();
+        data = resultado.data;
+
+        // Segunda llamada con el resultado del tool
+        const followUp = await groq.chat.completions.create({
+          model:      'llama-3.3-70b-versatile',
+          max_tokens: 2048,
+          temperature: 0.7,
+          messages: [
+            ...messages,
+            { role: 'assistant', content: null, tool_calls: toolCalls },
+            {
+              role:         'tool',
+              tool_call_id: toolCalls[0].id,
+              content:      JSON.stringify(resultado),
+            },
+          ],
+        });
+
+        respuestaFinal = followUp.choices[0]?.message?.content || '';
+      } else {
+        respuestaFinal = choice.message?.content || '';
+      }
+    } else {
+      // Respuesta directa sin tools
+      const completion = await groq.chat.completions.create({
+        model:       'llama-3.3-70b-versatile',
+        messages:    messages,
+        max_tokens:  1024,
+        temperature: 0.7,
+      });
+      respuestaFinal = completion.choices[0]?.message?.content || '';
+    }
 
     res.json({
-      response: respuestaLimpia,
-      data: null,
+      response:      eliminarMarkdown(respuestaFinal),
+      data:          data,
       tipo_consulta: tipo,
     });
 
@@ -160,5 +215,5 @@ app.post('/api/message', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🐝 Servidor Meli (con Groq) funcionando en http://localhost:${port}`);
+  console.log(`🐝 Servidor Meli (Groq + AG + Estadísticas) en http://localhost:${port}`);
 });

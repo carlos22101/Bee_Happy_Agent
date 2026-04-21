@@ -1,39 +1,106 @@
 // externs.js
+const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 
-// 1. La función que simula la obtención de datos
-async function combineEstadisticas() {
-  console.log("🐝 FUNCIÓN: combineEstadisticas() llamada");
-  // Simulación de una llamada a base de datos
-  // En una app real, aquí harías tu fetch a tu API_ESTADISTICA
-  const mockData = {
-    data: [
-      { colmena_id: "C-001", produccion_miel_kg: 5.2, salud: "fuerte", poblacion: 50000 },
-      { colmena_id: "C-002", produccion_miel_kg: 2.1, salud: "debil", poblacion: 15000 },
-      { colmena_id: "C-003", produccion_miel_kg: 4.8, salud: "fuerte", poblacion: 48000 },
-    ],
-    resumen: {
-      total_colmenas: 3,
-      produccion_total_kg: 12.1,
-      colmenas_debiles: 1,
+const API_ESTADISTICAS = process.env.API_ESTADISTICAS_URL || 'https://apiestadisticas.serviciocdn.icu/api/v1';
+const API_AG           = process.env.API_AG_URL           || 'https://AG.montsev.site';
+const MAC_RASPBERRY    = process.env.MAC_RASPBERRY        || 'AA:BB:CC:DD:EE:FF';
+
+// Obtiene estadísticas del día de todos los sensores de la Raspberry
+async function getEstadisticasDia() {
+  const res  = await fetch(`${API_ESTADISTICAS}/estadisticas/dia?mac_raspberry=${MAC_RASPBERRY}`);
+  const json = await res.json();
+  const data = json.data || [];
+
+  // Separar sensores por nombre inferido del valor (el AG solo necesita temp y hum)
+  // Los datos vienen todos juntos — buscamos el de mayor promedio (temp ~35) y el menor (hum ~60)
+  // Si tu API devuelve nombre_sensor en el futuro, úsalo directamente
+  let temperatura = null;
+  let humedad     = null;
+
+  for (const sensor of data) {
+    const prom = sensor.valor_promedio;
+    if (prom >= 20 && prom <= 50 && !temperatura) {
+      temperatura = sensor; // rango típico de temperatura de colmena
+    } else if (prom > 50 && prom <= 100 && !humedad) {
+      humedad = sensor; // rango típico de humedad
     }
+  }
+
+  return {
+    temperatura: temperatura ? {
+      promedio: temperatura.valor_promedio,
+      maximo:   temperatura.valor_maximo,
+      minimo:   temperatura.valor_minimo,
+      lecturas: temperatura.cantidad_lecturas,
+      fecha:    temperatura.fecha,
+    } : null,
+    humedad: humedad ? {
+      promedio: humedad.valor_promedio,
+      maximo:   humedad.valor_maximo,
+      minimo:   humedad.valor_minimo,
+      lecturas: humedad.cantidad_lecturas,
+      fecha:    humedad.fecha,
+    } : null,
+    todos_sensores: data,
   };
-  return mockData;
 }
 
-// 2. La definición de la herramienta para la API de Gemini
-// Es un array de objetos FunctionDeclaration
+// Llama al AG con temp y hum actuales
+async function ejecutarAG(temp_inicial, hum_inicial) {
+  const res = await fetch(`${API_AG}/api/ejecutar-simulacion`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ temp_inicial, hum_inicial }),
+  });
+  return await res.json();
+}
+
+// Función principal que combina estadísticas + AG
+async function combineEstadisticas() {
+  const stats = await getEstadisticasDia();
+
+  const temp = stats.temperatura?.promedio ?? 35.0;
+  const hum  = stats.humedad?.promedio     ?? 65.0;
+
+  const resultadoAG = await ejecutarAG(temp, hum);
+  const mejor       = resultadoAG.mejor_intervencion_global;
+  const bc          = resultadoAG.base_conocimiento_usada;
+
+  return {
+    data: {
+      estadisticas_dia:   stats,
+      mejor_intervencion: mejor,
+      base_conocimiento:  bc,
+      top3:               resultadoAG.tabla_top3,
+    },
+    resumen: {
+      temp_promedio_hoy: temp,
+      hum_promedio_hoy:  hum,
+      accion_recomendada: {
+        ventilacion: `${mejor?.vent   ?? 0}%`,
+        agua:        `${mejor?.agua   ?? 0} ml`,
+        jarabe:      `${mejor?.jarabe ?? 0} g`,
+        sombra:       mejor?.sombra ? 'Sí' : 'No',
+        costo_MXN:    mejor?.costo_MXN ?? 0,
+        fitness:      mejor?.fitness   ?? 0,
+      },
+    },
+  };
+}
+
+// Tool para Groq
 const tools = [
   {
-    functionDeclarations: [
-      {
-        name: "combineEstadisticas",
-        description: "Obtiene las estadísticas de producción y salud de todas las colmenas del apiario. Úsalo siempre que el usuario pida datos, números, reportes o un resumen de la producción.",
-        parameters: {
-          type: "OBJECT",
-          properties: {}, // No requiere parámetros de entrada
-        },
+    type: 'function',
+    function: {
+      name: 'combineEstadisticas',
+      description: 'Obtiene las estadísticas del día de temperatura y humedad de la colmena y ejecuta el algoritmo genético para determinar la mejor intervención (ventilación, agua, jarabe, sombra). Úsalo cuando el usuario pida datos, estadísticas, recomendaciones de intervención o el estado actual de la colmena.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
       },
-    ],
+    },
   },
 ];
 
